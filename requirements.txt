@@ -3,5 +3,4 @@ torch
 transformers
 peft
 Pillow
-accelerate
-safetensors
+huggingface_hub
