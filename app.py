@@ -1,20 +1,25 @@
+
 import streamlit as st
 import torch
 import requests
 import base64
+
 from io import BytesIO
 from PIL import Image
 from transformers import BlipProcessor, BlipForQuestionAnswering
 from peft import PeftModel
 
 # =========================================================
-# CONFIGURATION
+# 1. CONFIGURATION
 # =========================================================
 
 BASE_MODEL = "Salesforce/blip-vqa-base"
+
+# Correct repository name from your Hugging Face screenshot
 LORA_MODEL = "Cinny2004/CrackGPT-V8-LoRA"
 
-GROQ_MODEL = "qwen/qwen3.8-27b"
+# Vision-capable Groq model
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -25,75 +30,94 @@ st.set_page_config(
 )
 
 # =========================================================
-# STYLING
+# 2. UI STYLING
 # =========================================================
 
 st.markdown("""
 <style>
+
 .stApp {
     background-color: #101114;
-    color: #F2F2F2;
+    color: #f2f2f2;
 }
 
 section[data-testid="stSidebar"] {
-    background-color: #191A20;
+    background-color: #191a20;
 }
 
 h1, h2, h3 {
-    color: #F2F2F2;
+    color: #f2f2f2;
 }
 
-div[data-testid="stChatMessage"] {
+.stChatMessage {
     border-radius: 12px;
+}
+
+div[data-testid="stChatInput"] {
+    background-color: #24252b;
 }
 
 </style>
 """, unsafe_allow_html=True)
 
 # =========================================================
-# SYSTEM INSTRUCTIONS
+# 3. SYSTEM PROMPT
 # =========================================================
 
 SYSTEM_PROMPT = """
-You are CrackGPT, an AI assistant specializing in preliminary
-visual assessment of structural damage in concrete and infrastructure.
+You are CrackGPT, a conversational AI assistant specialized in
+preliminary visual structural damage assessment.
 
-You are having a real conversation with the user.
+Your domain includes:
+- Concrete structures
+- Buildings
+- Bridges
+- Columns
+- Beams
+- Slabs
+- Structural walls
+- Roads and infrastructure
+- Steel structural components
 
-RULES:
+You can identify and discuss:
+- Cracking
+- Spalling
+- Corrosion
+- Honeycombing
+- Surface voids
+- Exposed reinforcement
+- Delamination
+- Leakage
+- Deformation
+- Other visible deterioration
 
-1. Answer ONLY the question the user currently asks.
-2. Do not automatically generate a complete report.
-3. Keep answers clear, natural, and conversational.
-4. Use the uploaded image as your primary visual evidence.
-5. Identify visible damage carefully. Possible damage includes:
-   cracking, spalling, corrosion, honeycombing, voids,
-   exposed reinforcement, delamination, leakage, deformation,
-   and other deterioration.
-6. Never invent damage that is not visually supported.
-7. Do not blindly trust the BLIP/V8 model observation.
-   It may be incorrect, repetitive, or nonsensical.
-8. Independently inspect the image and use the V8 output only
-   as an additional clue.
-9. Clearly distinguish visible observations from possible causes.
-10. Do not claim exact severity or structural safety from an
-    image alone.
-11. When discussing causes, use terms such as "may be caused by"
-    or "possible causes include" where appropriate.
-12. Give practical inspection and repair suggestions when asked.
-13. Do not repeat the same damage label as an answer to every
-    question.
-14. Remember previous conversation messages and use them when
-    relevant to the user's follow-up questions.
-15. Use simple engineering language. Avoid meaningless answers.
-16. If the image is unclear, explicitly state the limitation.
+CONVERSATION RULES:
 
-Your responses should be helpful, technically responsible,
-and easy for civil engineering students and engineers to understand.
+1. Answer the user's current question directly.
+2. Do not automatically produce all 10 assessment answers.
+3. Respond naturally like a conversational assistant.
+4. Remember the previous conversation and use it when relevant.
+5. Use the uploaded image as visual context.
+6. Do not blindly trust the V8 model output.
+7. Independently inspect the image and use the V8 prediction only as
+   an additional clue.
+8. Do not repeatedly answer "spalling" to unrelated questions.
+9. Never invent structural damage that is not visible.
+10. Clearly separate visible observations from possible causes.
+11. If uncertain, explain what cannot be confirmed from the image.
+12. Explain structural concepts in simple engineering language.
+13. When asked about severity, explain the reasons for your assessment.
+14. When asked about causes, give possible causes rather than claiming
+    certainty.
+15. When asked about repairs, give practical engineering recommendations.
+16. Do not claim a structure is safe or unsafe from an image alone.
+17. Recommend professional inspection when necessary.
+
+Answer in a clear, useful, technically responsible manner.
 """
 
 # =========================================================
-# SIDEBAR
+# 4. SIDEBAR
 # =========================================================
 
 with st.sidebar:
@@ -116,8 +140,8 @@ with st.sidebar:
     st.caption("BLIP Vision-Language Model")
     st.caption("LoRA Fine-tuned")
 
-    st.markdown("### Reasoning Engine")
-    st.caption("Qwen Vision + Engineering Reasoning")
+    st.markdown("### AI Reasoning")
+    st.caption("Vision + Engineering Interpretation")
 
     st.divider()
 
@@ -127,17 +151,18 @@ with st.sidebar:
     - Cracking
     - Spalling
     - Corrosion
-    - Honeycombing / Voids
-    - Exposed Reinforcement
+    - Honeycombing
+    - Surface voids
+    - Exposed reinforcement
     - Delamination
     """)
 
     st.divider()
 
-    st.caption("AI-based preliminary structural assessment")
+    st.caption("Preliminary AI structural assessment")
 
 # =========================================================
-# SESSION STATE
+# 5. SESSION STATE
 # =========================================================
 
 if "messages" not in st.session_state:
@@ -150,13 +175,13 @@ if "image_name" not in st.session_state:
     st.session_state.image_name = None
 
 # =========================================================
-# LOAD V8 MODEL
+# 6. LOAD V8 MODEL
 # =========================================================
 
 @st.cache_resource
 def load_crackgpt_v8():
 
-    token = st.secrets["HF_TOKEN"]
+    hf_token = st.secrets["HF_TOKEN"]
 
     processor = BlipProcessor.from_pretrained(
         BASE_MODEL
@@ -169,7 +194,7 @@ def load_crackgpt_v8():
     model = PeftModel.from_pretrained(
         base_model,
         LORA_MODEL,
-        token=token
+        token=hf_token
     )
 
     model.to(DEVICE)
@@ -178,10 +203,10 @@ def load_crackgpt_v8():
     return processor, model
 
 # =========================================================
-# V8 VISUAL OBSERVATION
+# 7. V8 VISUAL ANALYSIS
 # =========================================================
 
-def get_v8_observation(image, question, processor, model):
+def analyze_with_v8(image, question, processor, model):
 
     inputs = processor(
         images=image,
@@ -196,23 +221,23 @@ def get_v8_observation(image, question, processor, model):
 
     with torch.no_grad():
 
-        output = model.generate(
+        outputs = model.generate(
             **inputs,
             max_new_tokens=60
         )
 
-    observation = processor.decode(
-        output[0],
+    answer = processor.decode(
+        outputs[0],
         skip_special_tokens=True
-    ).strip()
+    )
 
-    return observation
+    return answer.strip()
 
 # =========================================================
-# IMAGE ENCODING FOR VISION REASONING
+# 8. IMAGE CONVERSION
 # =========================================================
 
-def image_to_base64(image):
+def encode_image(image):
 
     buffer = BytesIO()
 
@@ -229,19 +254,19 @@ def image_to_base64(image):
     return f"data:image/jpeg;base64,{encoded}"
 
 # =========================================================
-# CONVERSATIONAL REASONING
+# 9. REASONING MODEL
 # =========================================================
 
-def get_reasoning_answer(
+def ask_reasoning_ai(
     question,
     image,
     v8_observation,
     conversation_history
 ):
 
-    api_key = st.secrets["GROQ_API_KEY"]
+    groq_key = st.secrets["GROQ_API_KEY"]
 
-    image_data = image_to_base64(image)
+    image_url = encode_image(image)
 
     messages = [
         {
@@ -250,7 +275,7 @@ def get_reasoning_answer(
         }
     ]
 
-    # Previous conversation
+    # Include previous conversational messages
     for message in conversation_history:
 
         messages.append({
@@ -258,37 +283,39 @@ def get_reasoning_answer(
             "content": message["content"]
         })
 
-    # Current question + image + V8 clue
-    current_content = [
+    # Current question with image and V8 observation
+    user_content = [
         {
             "type": "text",
             "text": (
-                f"User's current question: {question}\n\n"
-                f"CrackGPT V8 visual model observation: "
-                f"{v8_observation}\n\n"
-                "Treat the V8 observation as potentially unreliable. "
-                "Inspect the image independently and answer the user's "
-                "current question using visible evidence. Do not merely "
-                "repeat the V8 observation."
+                "CURRENT USER QUESTION:\n"
+                + question
+                + "\n\nV8 VISUAL MODEL OBSERVATION:\n"
+                + v8_observation
+                + "\n\nIndependently inspect the attached image. "
+                "The V8 observation may be incorrect. "
+                "Answer the current question directly, using "
+                "visual evidence and engineering reasoning."
             )
         },
         {
             "type": "image_url",
             "image_url": {
-                "url": image_data
+                "url": image_url
             }
         }
     ]
 
     messages.append({
         "role": "user",
-        "content": current_content
+        "content": user_content
     })
 
+    # Groq API
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {groq_key}",
             "Content-Type": "application/json"
         },
         json={
@@ -309,14 +336,17 @@ def get_reasoning_answer(
     return answer.strip()
 
 # =========================================================
-# MAIN PAGE
+# 10. MAIN INTERFACE
 # =========================================================
 
-st.title("🏗️ CrackGPT")
-st.caption("AI Structural Damage Assessment Assistant")
+st.title("🏗️ CrackGPT Structural Assessment")
+
+st.caption(
+    "Upload an image and start a conversation about structural damage."
+)
 
 # =========================================================
-# IMAGE UPLOAD
+# 11. IMAGE UPLOAD
 # =========================================================
 
 uploaded_file = st.file_uploader(
@@ -330,6 +360,7 @@ if uploaded_file is not None:
         uploaded_file
     ).convert("RGB")
 
+    # Reset history when a new image is uploaded
     if st.session_state.image_name != uploaded_file.name:
 
         st.session_state.uploaded_image = new_image
@@ -339,7 +370,7 @@ if uploaded_file is not None:
     st.session_state.uploaded_image = new_image
 
 # =========================================================
-# DISPLAY IMAGE
+# 12. DISPLAY IMAGE
 # =========================================================
 
 if st.session_state.uploaded_image is not None:
@@ -350,21 +381,28 @@ if st.session_state.uploaded_image is not None:
         width=500
     )
 
+    st.success(
+        "Image loaded. Ask your first question below."
+    )
+
 else:
 
-    st.info("Upload a structural image to begin.")
+    st.info(
+        "Upload an image to begin your structural assessment."
+    )
 
 # =========================================================
-# CHAT HISTORY
+# 13. DISPLAY CONVERSATION
 # =========================================================
 
 for message in st.session_state.messages:
 
     with st.chat_message(message["role"]):
+
         st.markdown(message["content"])
 
 # =========================================================
-# CHAT INPUT
+# 14. CHAT INPUT
 # =========================================================
 
 prompt = st.chat_input(
@@ -379,9 +417,9 @@ if prompt:
 
     else:
 
-        image = st.session_state.uploaded_image
+        current_image = st.session_state.uploaded_image
 
-        # Display user question
+        # Save and display user message
         st.session_state.messages.append({
             "role": "user",
             "content": prompt
@@ -394,42 +432,66 @@ if prompt:
 
             try:
 
-                # Load V8 visual model
-                with st.spinner("Examining image with CrackGPT V8..."):
+                # -----------------------------
+                # V8 VISUAL ANALYSIS
+                # -----------------------------
+
+                with st.spinner(
+                    "CrackGPT V8 is examining the image..."
+ 
+                ):
 
                     processor, v8_model = load_crackgpt_v8()
 
-                    v8_observation = get_v8_observation(
-                        image,
+                    v8_observation = analyze_with_v8(
+                        current_image,
                         prompt,
                         processor,
                         v8_model
                     )
 
-                # Generate reasoning response
-                with st.spinner("Engineering reasoning in progress..."):
+                # -----------------------------
+                # REASONING
+                # -----------------------------
 
-                    answer = get_reasoning_answer(
+                with st.spinner(
+                    "Preparing engineering response..."
+                ):
+
+                    answer = ask_reasoning_ai(
                         question=prompt,
-                        image=image,
+                        image=current_image,
                         v8_observation=v8_observation,
                         conversation_history=st.session_state.messages[:-1]
                     )
 
+                # Display final answer
                 st.markdown(answer)
 
-                # Save assistant answer
+                # Save assistant response
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": answer
                 })
 
+            # -----------------------------
+            # ERROR HANDLING
+            # -----------------------------
+
             except requests.exceptions.HTTPError as e:
 
                 st.error(
-                    f"Reasoning API error: {e.response.text}"
+                    f"Groq API error: {e.response.text}"
+                )
+
+            except requests.exceptions.Timeout:
+
+                st.error(
+                    "The AI request timed out. Please try again."
                 )
 
             except Exception as e:
 
-                st.error(f"CrackGPT error: {str(e)}")
+                st.error(
+                    f"CrackGPT error: {str(e)}"
+                )
