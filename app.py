@@ -1,120 +1,139 @@
 
 import streamlit as st
 from PIL import Image
+import torch
+from transformers import BlipProcessor, BlipForQuestionAnswering
+from peft import PeftModel
+from huggingface_hub import login
+import io
 
 # ================= CONFIG =================
 st.set_page_config(
     page_title="CrackGPT | Structural Intelligence",
     page_icon="🏗️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# ================= CUSTOM CSS =================
+BASE_MODEL = "Salesforce/blip-vqa-base"
+LORA_REPO = "Cinny2004/CrackGPT-V8-LoRA"
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# ================= PROFESSIONAL CSS =================
 st.markdown("""
 <style>
-
-/* Main application */
 .stApp {
-    background-color: #111827;
-    color: #F9FAFB;
+    background: #0e1117;
+    color: #e8edf5;
 }
 
-/* Header */
 header[data-testid="stHeader"] {
-    background: #111827;
+    background: transparent;
 }
 
-/* Sidebar */
-section[data-testid="stSidebar"] {
-    background-color: #0B1120;
-    border-right: 1px solid #263247;
-}
-
-section[data-testid="stSidebar"] * {
-    color: #E5E7EB;
-}
-
-/* Main layout */
 .block-container {
-    max-width: 1100px;
+    max-width: 1150px;
     padding-top: 2rem;
     padding-bottom: 2rem;
 }
 
-/* Headings */
+section[data-testid="stSidebar"] {
+    background: #151a23;
+    border-right: 1px solid #252e3b;
+}
+
+section[data-testid="stSidebar"] * {
+    color: #e8edf5;
+}
+
 h1, h2, h3 {
-    color: #F9FAFB !important;
+    color: #f5f7fb !important;
 }
 
-/* Paragraphs */
-p, label {
-    color: #D1D5DB;
+p, label, span {
+    color: inherit;
 }
 
-/* Chat messages */
-[data-testid="stChatMessage"] {
-    background-color: #1B2433;
-    border: 1px solid #263247;
-    border-radius: 14px;
-    padding: 16px;
+.stTextInput input,
+.stTextArea textarea,
+[data-testid="stChatInput"] textarea {
+    color: #ffffff !important;
+    background-color: #1b2330 !important;
+    border: 1px solid #394657 !important;
+    border-radius: 12px !important;
 }
 
-/* Chat input */
 [data-testid="stChatInput"] {
-    background-color: #FFFFFF !important;
-    border: 2px solid #64748B !important;
-    border-radius: 14px !important;
+    background: #151b24 !important;
+    border: 1px solid #344152 !important;
+    border-radius: 16px !important;
 }
 
 [data-testid="stChatInput"] textarea {
-    color: #111827 !important;
-    background-color: #FFFFFF !important;
-    caret-color: #111827 !important;
-    -webkit-text-fill-color: #111827 !important;
+    color: white !important;
+    caret-color: white !important;
 }
 
-[data-testid="stChatInput"] textarea::placeholder {
-    color: #6B7280 !important;
-    opacity: 1 !important;
-}
-
-/* Upload area */
 [data-testid="stFileUploader"] {
-    background-color: #1B2433;
-    border: 1px solid #374151;
-    border-radius: 14px;
+    background: #171e28;
+    border: 1px solid #344152;
     padding: 14px;
+    border-radius: 14px;
 }
 
-[data-testid="stFileUploader"] * {
-    color: #E5E7EB !important;
+[data-testid="stChatMessage"] {
+    background: #151c26;
+    border: 1px solid #283444;
+    border-radius: 16px;
+    padding: 15px;
+    margin-bottom: 12px;
 }
 
-/* Buttons */
-.stButton > button {
+.stButton button {
     border-radius: 10px;
-    border: 1px solid #374151;
     font-weight: 600;
 }
 
-/* Image */
-img {
-    border-radius: 12px;
+div[data-testid="stMarkdownContainer"] {
+    color: #e8edf5;
 }
 
-/* Hide footer */
 footer {
     visibility: hidden;
 }
 
-/* Remove unnecessary top whitespace */
-[data-testid="stVerticalBlock"] {
-    gap: 1rem;
-}
-
 </style>
 """, unsafe_allow_html=True)
+
+# ================= MODEL LOADING =================
+@st.cache_resource
+def load_model():
+
+    token = st.secrets["HF_TOKEN"]
+
+    login(token=token, add_to_git_credential=False)
+
+    processor = BlipProcessor.from_pretrained(
+        BASE_MODEL,
+        token=token
+    )
+
+    base_model = BlipForQuestionAnswering.from_pretrained(
+        BASE_MODEL,
+        token=token
+    )
+
+    model = PeftModel.from_pretrained(
+        base_model,
+        LORA_REPO,
+        token=token
+    )
+
+    model.eval()
+    model.to(DEVICE)
+
+    return processor, model
+
 
 # ================= SESSION STATE =================
 if "messages" not in st.session_state:
@@ -130,102 +149,78 @@ if "image_name" not in st.session_state:
 # ================= SIDEBAR =================
 with st.sidebar:
 
-    st.markdown("# 🏗️ CrackGPT")
+    st.markdown("""
+    <div style="padding:10px 0;">
+        <h2>🏗️ CrackGPT</h2>
+        <p style="color:#9ba8b8;">Structural Intelligence</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("### Structural Intelligence")
+    st.markdown("---")
 
-    st.caption("AI-powered infrastructure damage assessment")
+    st.markdown("### CrackGPT V8")
+    st.caption("AI Structural Damage Assessment")
+    st.caption("BLIP + LoRA Fine-tuned Model")
 
-    st.divider()
+    st.markdown("---")
 
-    if st.button("＋  New Analysis", use_container_width=True):
+    st.markdown("### Model")
+    st.markdown("🧠 BLIP VQA")
+    st.markdown("⚙️ LoRA Fine-tuning")
+    st.markdown(f"💻 Device: {DEVICE.upper()}")
+
+    st.markdown("---")
+
+    if st.button("＋ New conversation", use_container_width=True):
 
         st.session_state.messages = []
         st.session_state.current_image = None
         st.session_state.image_name = None
-
         st.rerun()
 
-    st.divider()
-
-    st.markdown("### MODEL")
-
-    st.markdown("**CrackGPT V8**")
-
-    st.caption("BLIP Vision-Language Model")
-
-    st.caption("LoRA Fine-Tuned")
-
-    st.divider()
-
-    st.markdown("### Supported Analysis")
-
     st.markdown("""
-    - Concrete cracking
-    - Spalling
-    - Corrosion
-    - Honeycombing
-    - Exposed reinforcement
-    - Surface damage
-    """)
-
-    st.divider()
-
-    st.caption("Structural damage analysis powered by AI.")
+    <div style="margin-top:20px;color:#8491a3;font-size:13px;">
+        Analyze cracks, concrete defects and structural damage
+        using AI-powered visual assessment.
+    </div>
+    """, unsafe_allow_html=True)
 
 
-# ================= MAIN HEADER =================
+# ================= HEADER =================
+st.markdown("""
+<div style="text-align:center;padding:20px 0 10px 0;">
+    <h1 style="font-size:42px;">CrackGPT</h1>
+    <p style="font-size:17px;color:#9ba8b8;">
+        AI-powered Structural Damage Assessment
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ================= INITIAL SCREEN =================
 if len(st.session_state.messages) == 0:
 
-    st.markdown(
-        """
-        <div style="text-align:center; padding-top:45px;">
-            <div style="
-                font-size:15px;
-                color:#60A5FA;
-                letter-spacing:3px;
-                font-weight:600;
-            ">
-                STRUCTURAL INTELLIGENCE
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.title("CrackGPT")
-
-    st.markdown(
-        """
-        <div style="
-            font-size:28px;
-            font-weight:400;
-            color:#F9FAFB;
-            margin-bottom:10px;
-        ">
-        Structural Damage Assessment
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.markdown(
-        "Analyze concrete and infrastructure images using an AI vision model."
-    )
-
-else:
-
-    st.markdown("## CrackGPT")
-    st.caption("Structural Damage Assessment")
+    st.markdown("""
+    <div style="
+        text-align:center;
+        padding:25px;
+        background:#151c26;
+        border:1px solid #283444;
+        border-radius:18px;
+        margin-bottom:20px;
+    ">
+        <h2>Structural Inspection Assistant</h2>
+        <p style="color:#aab6c5;">
+        Upload an image of structural damage and ask a question.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ================= IMAGE UPLOAD =================
-st.markdown("### 📷 Upload Structural Image")
-
 uploaded_file = st.file_uploader(
-    "Upload an image for inspection",
-    type=["jpg", "jpeg", "png", "webp"],
-    label_visibility="collapsed"
+    "📷 Upload a structural damage image",
+    type=["jpg", "jpeg", "png", "webp"]
 )
 
 if uploaded_file is not None:
@@ -235,20 +230,12 @@ if uploaded_file is not None:
     st.session_state.current_image = image
     st.session_state.image_name = uploaded_file.name
 
-    st.success(f"Image loaded: {uploaded_file.name}")
+    st.markdown("### Uploaded image")
 
     st.image(
         image,
-        caption="Uploaded structural image",
-        width=500
-    )
-
-elif st.session_state.current_image is not None:
-
-    st.image(
-        st.session_state.current_image,
-        caption="Current image",
-        width=500
+        caption=uploaded_file.name,
+        use_container_width=True
     )
 
 
@@ -268,40 +255,85 @@ prompt = st.chat_input(
     "Describe the damage or ask a question about the image..."
 )
 
+
+# ================= INFERENCE =================
 if prompt:
 
-    image_to_use = st.session_state.current_image
+    current_image = st.session_state.current_image
 
-    # Save user message
-    st.session_state.messages.append({
-        "role": "user",
-        "content": prompt,
-        "image": image_to_use
-    })
+    if current_image is None:
 
-    with st.chat_message("user"):
+        st.warning("Please upload a structural damage image first.")
 
-        if image_to_use is not None:
-            st.image(image_to_use, width=400)
+    else:
 
-        st.markdown(prompt)
+        st.session_state.messages.append({
+            "role": "user",
+            "content": prompt,
+            "image": current_image
+        })
 
-    # Temporary response until model connection is implemented
-    response = """
-### Analysis Request Received
+        with st.chat_message("user"):
 
-Your image and question have been received successfully.
+            st.image(current_image, width=400)
+            st.markdown(prompt)
 
-**CrackGPT V8 Integration**
-The trained BLIP + LoRA damage assessment model will provide the actual structural damage analysis once the model inference pipeline is connected to this interface.
-"""
+        with st.chat_message("assistant"):
 
-    with st.chat_message("assistant"):
-        st.markdown(response)
+            with st.spinner("Analyzing structural damage..."):
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": response
-    })
+                try:
 
-    st.rerun()
+                    processor, model = load_model()
+
+                    inputs = processor(
+                        images=current_image,
+                        text=prompt,
+                        return_tensors="pt"
+                    )
+
+                    inputs = {
+                        k: v.to(DEVICE)
+                        for k, v in inputs.items()
+                    }
+
+                    with torch.no_grad():
+
+                        output = model.generate(
+                            **inputs,
+                            max_new_tokens=100
+                        )
+
+                    answer = processor.decode(
+                        output[0],
+                        skip_special_tokens=True
+                    )
+
+                    st.markdown("### 🔍 Damage Assessment")
+                    st.markdown(answer)
+
+                except Exception as e:
+
+                    answer = f"Model error: {str(e)}"
+
+                    st.error(answer)
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer
+        })
+
+        st.rerun()
+
+
+# ================= FOOTER =================
+st.markdown("""
+<div style="
+    text-align:center;
+    padding:25px 0;
+    color:#7f8b9c;
+    font-size:12px;
+">
+    CrackGPT V8 · BLIP + LoRA · AI Structural Damage Assessment
+</div>
+""", unsafe_allow_html=True)
