@@ -1,0 +1,7 @@
+streamlit
+torch
+transformers
+peft
+Pillow
+accelerate
+safetensors
