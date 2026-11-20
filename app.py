@@ -19,7 +19,7 @@ BASE_MODEL = "Salesforce/blip-vqa-base"
 LORA_MODEL = "Cinny2004/CrackGPT-V8-LoRA"
 
 # Vision-capable Groq model
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_MODEL = ""qwen/qwen3.8-27b""
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
