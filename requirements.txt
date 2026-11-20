@@ -4,3 +4,4 @@ transformers
 peft
 Pillow
 huggingface_hub
+safetensors
