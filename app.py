@@ -1,96 +1,96 @@
 import streamlit as st
-import requests, base64, sqlite3, uuid, os, json
+import requests
+import sqlite3
+import base64
+import uuid
 from datetime import datetime
-from io import BytesIO
 from PIL import Image
+from io import BytesIO
 
-# ===================== CONFIG =====================
+# ---------------- CONFIG ----------------
+st.set_page_config(page_title="CrackGPT | Structural Intelligence", page_icon="🏗️", layout="wide")
 DB_PATH = "crackgpt_chat_history.db"
-GROQ_MODEL = "qwen/qwen3.8-27b"  # multimodal vision model
-API_URL = "https://api.groq.com/openai/v1/chat/completions"
-SYSTEM_PROMPT = """You are CrackGPT, a focused conversational assistant for preliminary visual structural damage assessment.
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+DEFAULT_MODEL = "qwen/qwen3.8-27b"
 
-STRICT CONVERSATION RULES:
-- Answer ONLY the exact question in the latest user message. Do not answer any other assessment questions unless the user asks them.
-- Do not volunteer a full assessment, extra headings, causes, risks, tests, or repairs when they were not requested.
-- Keep answers concise: normally 2-5 sentences, or a few short bullets only if the current question needs them.
-- The uploaded image is the visual evidence. Use previous messages only as conversation context, not as a reason to repeat them.
-- Stay consistent about the material and damage visible in the image. Never switch from concrete to wood (or another material) without clear visual evidence.
-- Do not hallucinate. If a feature is unclear or not visible, say so plainly.
-- Distinguish visible observations from interpretations. Rust staining alone does not prove exposed reinforcement or active corrosion.
-- Do not diagnose severity as certain from an image alone and never declare the structure safe or unsafe.
-- For the user's current question: damage type -> name the visible type only; location -> location only; appearance -> describe only; severity -> severity and visible reasons; causes -> plausible causes only; risks -> risks only; durability -> durability only; tests -> tests only; repair -> repair methods only.
-- Give a complete assessment with sections ONLY when the user explicitly asks for a complete/overall assessment or summary.
-- If the user asks a follow-up, directly address it without restarting the assessment.
-- Use plain, professional, engineering language. No filler greetings, apologies, or closing offers.
-- Remind the user that visual assessment is preliminary and requires on-site inspection only when safety, severity, or repair decisions are discussed, and keep that reminder brief.
+SYSTEM_PROMPT = """You are CrackGPT, a visual structural-damage discussion assistant.
+Answer ONLY the user's current question. Do not automatically provide a full assessment or answer other questions that were not asked.
+Use the uploaded image as evidence. Describe only details you can reasonably see. Clearly distinguish visible observations from possible explanations.
+Do not invent material type, reinforcement exposure, corrosion, dimensions, severity, or structural safety. If something cannot be confirmed from the image, say so.
+Keep answers concise, clear, and technically useful. For structural safety decisions, state that image-based assessment alone is not sufficient and an engineer/site inspection may be needed.
+Maintain the conversation context so follow-up questions can refer to the same image and previous answers.
+Only provide a complete structural damage assessment if the user explicitly asks for one.
 """
 
-st.set_page_config(page_title="CrackGPT | Structural Intelligence", page_icon="🏗️", layout="wide")
-st.markdown("""<style>
-.stApp{background:#101114;color:#f3f3f3} section[data-testid='stSidebar']{background:#191a20}
-[data-testid='stChatMessage']{border-radius:14px} div[data-testid='stChatInput']{background:#24252b}
-</style>""", unsafe_allow_html=True)
-
-
-# ===================== SQLITE =====================
+# ---------------- DATABASE ----------------
 def db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.execute("CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, image_name TEXT, image_data BLOB, image_mime TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, role TEXT, content TEXT, created_at TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, title TEXT, image BLOB, image_type TEXT, created TEXT, updated TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, role TEXT, content TEXT, created TEXT)")
     conn.commit()
     return conn
 
-conn = db()
 
-
-def new_chat():
+def create_chat():
     chat_id = str(uuid.uuid4())
-    conn.execute("INSERT INTO chats (id,title,created_at,image_name,image_data,image_mime) VALUES (?,?,?,?,?,?)", (chat_id, "New conversation", datetime.now().isoformat(), None, None, None))
+    now = datetime.now().isoformat(timespec="seconds")
+    conn = db()
+    conn.execute("INSERT INTO chats (id,title,image,image_type,created,updated) VALUES (?,?,?,?,?,?)", (chat_id, "New conversation", None, None, now, now))
     conn.commit()
-    st.query_params["chat"] = chat_id
+    conn.close()
     return chat_id
 
 
+def get_chats():
+    conn = db()
+    rows = conn.execute("SELECT id,title,updated FROM chats ORDER BY updated DESC").fetchall()
+    conn.close()
+    return rows
+
+
 def get_chat(chat_id):
-    return conn.execute("SELECT id,title,image_name,image_data,image_mime FROM chats WHERE id=?", (chat_id,)).fetchone()
+    conn = db()
+    row = conn.execute("SELECT id,title,image,image_type FROM chats WHERE id=?", (chat_id,)).fetchone()
+    conn.close()
+    return row
 
 
-def get_messages(chat_id):
-    rows = conn.execute("SELECT role,content FROM messages WHERE chat_id=? ORDER BY id", (chat_id,)).fetchall()
-    return [{"role": r[0], "content": r[1]} for r in rows]
+def save_image(chat_id, image_bytes, image_type):
+    conn = db()
+    conn.execute("UPDATE chats SET image=?, image_type=?, updated=? WHERE id=?", (image_bytes, image_type, datetime.now().isoformat(timespec="seconds"), chat_id))
+    conn.commit()
+    conn.close()
 
 
 def save_message(chat_id, role, content):
-    conn.execute("INSERT INTO messages(chat_id,role,content,created_at) VALUES(?,?,?,?)", (chat_id, role, content, datetime.now().isoformat()))
+    conn = db()
+    now = datetime.now().isoformat(timespec="seconds")
+    conn.execute("INSERT INTO messages (chat_id,role,content,created) VALUES (?,?,?,?)", (chat_id, role, content, now))
+    conn.execute("UPDATE chats SET updated=? WHERE id=?", (now, chat_id))
     conn.commit()
+    conn.close()
+
+
+def get_messages(chat_id):
+    conn = db()
+    rows = conn.execute("SELECT role,content FROM messages WHERE chat_id=? ORDER BY id", (chat_id,)).fetchall()
+    conn.close()
+    return rows
 
 
 def update_title(chat_id, title):
-    conn.execute("UPDATE chats SET title=? WHERE id=? AND title='New conversation'", (title[:70], chat_id))
+    conn = db()
+    conn.execute("UPDATE chats SET title=? WHERE id=? AND title='New conversation'", (title[:55], chat_id))
     conn.commit()
+    conn.close()
+
+# ---------------- HELPERS ----------------
+def image_data_url(image_bytes, image_type):
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{image_type};base64,{encoded}"
 
 
-def save_image(chat_id, file):
-    raw = file.getvalue()
-    mime = file.type or "image/jpeg"
-    conn.execute("UPDATE chats SET image_name=?, image_data=?, image_mime=? WHERE id=?", (file.name, raw, mime, chat_id))
-    conn.commit()
 
-# ===================== CHAT ID =====================
-chat_id = st.query_params.get("chat")
-if not chat_id or not get_chat(chat_id):
-    chat_id = new_chat()
-chat = get_chat(chat_id)
-
-# ===================== SIDEBAR =====================
-with st.sidebar:
-    st.markdown("# 🏗️ CrackGPT")
-    st.caption("Structural Intelligence")
-    if st.button("＋ New conversation", use_container_width=True):
-        new_chat()
-        st.rerun()
-    st.divider()
-    st.markdown("### CrackGPT Vision")
-    st.caption("Image-based structural damage discussion")
-    st.caption("Conversational question-by-question assessment")
+def ask_groq(chat_id, question, image_bytes, image_type, history):
+    api_key = st.secrets.get("GROQ_API_KEY", "")
+    model = st.secrets.get("GROQ_MODEL", DEFAULT_MODEL)
