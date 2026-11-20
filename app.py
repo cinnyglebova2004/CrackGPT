@@ -6,7 +6,7 @@ from transformers import BlipProcessor, BlipForQuestionAnswering
 from peft import PeftModel
 
 # =========================================================
-# CONFIG
+# CONFIGURATION
 # =========================================================
 
 BASE_MODEL = "Salesforce/blip-vqa-base"
@@ -15,13 +15,13 @@ LORA_MODEL = "Cinny2004/CrackGPT-V8-LoRA"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 st.set_page_config(
-    page_title="CrackGPT V8",
+    page_title="CrackGPT | Structural Intelligence",
     page_icon="🏗️",
     layout="wide"
 )
 
 # =========================================================
-# UI STYLE
+# STYLE
 # =========================================================
 
 st.markdown("""
@@ -30,15 +30,19 @@ st.markdown("""
     background-color: #101114;
     color: #F2F2F2;
 }
+
 section[data-testid="stSidebar"] {
     background-color: #191A20;
 }
+
 h1, h2, h3 {
     color: #F2F2F2;
 }
+
 div[data-testid="stChatMessage"] {
     border-radius: 12px;
 }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -57,8 +61,7 @@ with st.sidebar:
 
         st.session_state.messages = []
         st.session_state.uploaded_image = None
-        st.session_state.assessment_started = False
-        st.session_state.assessment_completed = False
+        st.session_state.image_name = None
         st.rerun()
 
     st.divider()
@@ -81,10 +84,23 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption("AI-based preliminary structural assessment")
+    st.caption("Ask questions one at a time.")
 
 # =========================================================
-# LOAD MODEL
+# SESSION STATE
+# =========================================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "uploaded_image" not in st.session_state:
+    st.session_state.uploaded_image = None
+
+if "image_name" not in st.session_state:
+    st.session_state.image_name = None
+
+# =========================================================
+# MODEL LOADING
 # =========================================================
 
 @st.cache_resource
@@ -112,7 +128,7 @@ def load_crackgpt():
     return processor, model
 
 # =========================================================
-# MODEL ANSWER
+# AI RESPONSE
 # =========================================================
 
 def ask_crackgpt(image, question, processor, model):
@@ -138,216 +154,84 @@ def ask_crackgpt(image, question, processor, model):
     answer = processor.decode(
         output[0],
         skip_special_tokens=True
-    ).strip()
-
-    return answer
-
-# =========================================================
-# ASSESSMENT QUESTIONS
-# =========================================================
-
-ASSESSMENT_QUESTIONS = [
-    (
-        "Damage Identification",
-        "What type of structural damage is visible in this image?"
-    ),
-    (
-        "Damage Location",
-        "Where is the damage located in the structural element?"
-    ),
-    (
-        "Damage Description",
-        "Describe the visible characteristics and extent of the damage."
-    ),
-    (
-        "Severity Assessment",
-        "How severe does the visible damage appear?"
-    ),
-    (
-        "Possible Causes",
-        "What are the possible causes of this damage?"
-    ),
-    (
-        "Structural Risks",
-        "What structural risks could this damage create?"
-    ),
-    (
-        "Durability Impact",
-        "How could this damage affect the long-term durability of the structure?"
-    ),
-    (
-        "Further Investigation",
-        "What additional inspections or tests are required to evaluate this damage?"
-    ),
-    (
-        "Recommended Repair",
-        "What repair or rehabilitation method may be suitable for this damage?"
-    ),
-    (
-        "Complete Assessment",
-        "Provide a complete structural damage assessment summarizing the damage, severity, causes, risks, and recommended actions."
     )
-]
+
+    return answer.strip()
 
 # =========================================================
-# SESSION STATE
+# MAIN INTERFACE
 # =========================================================
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-if "uploaded_image" not in st.session_state:
-    st.session_state.uploaded_image = None
-
-if "assessment_started" not in st.session_state:
-    st.session_state.assessment_started = False
-
-if "assessment_completed" not in st.session_state:
-    st.session_state.assessment_completed = False
-
-# =========================================================
-# MAIN PAGE
-# =========================================================
-
-st.title("Structural Inspection Assistant")
-
-st.caption(
-    "Upload a structural damage image to begin your assessment."
-)
+st.title("🏗️ CrackGPT")
+st.caption("AI Structural Damage Assessment Assistant")
 
 # =========================================================
 # IMAGE UPLOAD
 # =========================================================
 
 uploaded_file = st.file_uploader(
-    "Upload a concrete or infrastructure image",
+    "Upload a structural image to start chatting",
     type=["jpg", "jpeg", "png", "webp"]
 )
 
-if uploaded_file:
+if uploaded_file is not None:
 
-    image = Image.open(uploaded_file).convert("RGB")
+    new_image = Image.open(uploaded_file).convert("RGB")
 
-    st.session_state.uploaded_image = image
+    # Reset conversation when a different image is uploaded
+    if st.session_state.image_name != uploaded_file.name:
 
-    st.image(
-        image,
-        caption="Uploaded structural image",
-        use_container_width=True
-    )
+        st.session_state.uploaded_image = new_image
+        st.session_state.image_name = uploaded_file.name
+        st.session_state.messages = []
 
-    if not st.session_state.assessment_started:
-
-        if st.button(
-            "Start Structural Assessment",
-            type="primary",
-            use_container_width=True
-        ):
-
-            st.session_state.assessment_started = True
-            st.rerun()
+    st.session_state.uploaded_image = new_image
 
 # =========================================================
-# DISPLAY CHAT HISTORY
+# SHOW UPLOADED IMAGE
+# =========================================================
+
+if st.session_state.uploaded_image is not None:
+
+    st.image(
+        st.session_state.uploaded_image,
+        caption="Structural image under analysis",
+        width=500
+    )
+
+    st.success("Image loaded. Ask your first question below.")
+
+else:
+
+    st.info("Upload an image to begin your structural assessment conversation.")
+
+# =========================================================
+# CHAT HISTORY
 # =========================================================
 
 for message in st.session_state.messages:
 
     with st.chat_message(message["role"]):
+
         st.markdown(message["content"])
 
 # =========================================================
-# RUN SEQUENTIAL ASSESSMENT
+# CONVERSATIONAL QUESTION INPUT
 # =========================================================
 
-if (
-    st.session_state.assessment_started
-    and not st.session_state.assessment_completed
-    and st.session_state.uploaded_image is not None
-):
+prompt = st.chat_input(
+    "Ask CrackGPT a question about the structural damage..."
+)
 
-    image = st.session_state.uploaded_image
+if prompt:
 
-    try:
+    if st.session_state.uploaded_image is None:
 
-        processor, model = load_crackgpt()
+        st.warning("Please upload a structural image first.")
 
-        st.markdown("---")
-        st.markdown("## 🏗️ CrackGPT Structural Assessment")
+    else:
 
-        progress = st.progress(0)
-
-        status = st.empty()
-
-        assessment_results = []
-
-        for index, (heading, question) in enumerate(
-            ASSESSMENT_QUESTIONS
-        ):
-
-            status.markdown(
-                f"### Step {index + 1}/10 · {heading}"
-            )
-
-            # Display question as a conversational assistant message
-            with st.chat_message("assistant"):
-
-                st.markdown(f"**{question}**")
-
-                with st.spinner("Analyzing image..."):
-
-                    answer = ask_crackgpt(
-                        image,
-                        question,
-                        processor,
-                        model
-                    )
-
-                st.write(answer)
-
-            # Save question and answer
-            assessment_results.append(
-                (heading, question, answer)
-            )
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": f"**{heading}**\n\n{question}\n\n{answer}"
-            })
-
-            progress.progress(
-                (index + 1) / len(ASSESSMENT_QUESTIONS)
-            )
-
-        progress.empty()
-        status.empty()
-
-        st.success("Structural assessment completed.")
-
-        st.warning(
-            "This is an AI-based preliminary visual assessment. "
-            "Structural severity, safety, and repair requirements "
-            "must be verified by a qualified structural engineer."
-        )
-
-        st.session_state.assessment_completed = True
-
-    except Exception as e:
-
-        st.error(f"Model error: {str(e)}")
-
-# =========================================================
-# FOLLOW-UP CONVERSATION
-# =========================================================
-
-if st.session_state.assessment_completed:
-
-    prompt = st.chat_input(
-        "Ask a follow-up question about the assessment..."
-    )
-
-    if prompt:
-
+        # Display user question
         st.session_state.messages.append({
             "role": "user",
             "content": prompt
@@ -356,13 +240,14 @@ if st.session_state.assessment_completed:
         with st.chat_message("user"):
             st.markdown(prompt)
 
+        # Generate answer
         with st.chat_message("assistant"):
 
             try:
 
                 processor, model = load_crackgpt()
 
-                with st.spinner("CrackGPT is thinking..."):
+                with st.spinner("CrackGPT is analyzing your question..."):
 
                     answer = ask_crackgpt(
                         st.session_state.uploaded_image,
@@ -373,6 +258,7 @@ if st.session_state.assessment_completed:
 
                 st.markdown(answer)
 
+                # Save answer
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": answer
@@ -380,4 +266,5 @@ if st.session_state.assessment_completed:
 
             except Exception as e:
 
-                st.error(f"Model error: {str(e)}")
+                st.error(f"Error: {str(e)}")
+
