@@ -1,9 +1,3 @@
 streamlit
-torch
-transformers
-peft
-Pillow
-huggingface_hub
-safetensors
 requests
-
+Pillow
