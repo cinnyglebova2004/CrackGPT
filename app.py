@@ -166,7 +166,7 @@ def ask_groq(question, image_bytes, mime_type, history):
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     # Recent text conversation only. Current/linked image is attached below.
-    for role, content in history[-12:]:
+    for role, content in history[-6:]:
         if role in ("user", "assistant"):
             messages.append({"role": role, "content": content})
     user_content = [{"type": "text", "text": question}]
