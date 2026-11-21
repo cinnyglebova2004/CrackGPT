@@ -151,7 +151,7 @@ def ask_groq(question, image_bytes, mime_type, history):
     for role, content in history[-12:]:
         if role in ("user", "assistant"):
             messages.append({"role": role, "content": content})
-     user_content = [{"type": "text", "text": question}]
+    user_content = [{"type": "text", "text": question}]
     if image_bytes:
         user_content.append({
             "type": "image_url",
