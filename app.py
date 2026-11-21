@@ -4,12 +4,13 @@ import requests
 import sqlite3
 import base64
 import uuid
-import os
 from datetime import datetime
+from PIL import Image
+from io import BytesIO
 
-# =========================================================
-# CONFIGURATION
-# =========================================================
+# ============================================================
+# CONFIG
+# ============================================================
 
 st.set_page_config(
     page_title="CrackGPT | Structural Intelligence",
@@ -18,76 +19,44 @@ st.set_page_config(
 )
 
 DB_PATH = "crackgpt_chat_history.db"
-
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-DEFAULT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+DEFAULT_MODEL = "qwen/qwen3.8-27b"
 
 SYSTEM_PROMPT = """
-You are CrackGPT, an AI assistant specialized in visual structural
-damage understanding and structural engineering discussions.
+You are CrackGPT, a visual structural-damage discussion assistant.
 
-STRICT QUESTION-ANSWERING BEHAVIOR:
+STRICT RESPONSE RULES:
+1. Answer ONLY the user's current question.
+2. Do not provide a full structural assessment unless explicitly requested.
+3. Do not answer questions the user did not ask.
+4. Do not add unsolicited sections such as causes, risks, repairs,
+   recommendations, inspection advice, or summaries.
+5. Keep answers concise, direct, and relevant.
+6. Use the uploaded image as evidence when available.
+7. Describe visible observations separately from possible explanations.
+8. Never invent dimensions, materials, reinforcement, corrosion,
+   severity, or structural safety.
+9. If the image does not provide enough evidence, clearly say so.
+10. Maintain conversation context for follow-up questions.
+11. If the user asks for a location, answer only the location question.
+12. If the user asks for damage type, answer only the damage type.
+13. If the user asks for causes, discuss causes only.
+14. If the user asks for repair suggestions, discuss repairs only.
+15. Do not repeat previous answers unless the user requests it.
 
-- Answer ONLY the question currently asked by the user.
-- Do not answer questions that the user did not ask.
-- Never automatically generate a complete damage assessment.
-- Never add causes, severity, risks, repairs, recommendations,
-  inspection procedures, or conclusions unless requested.
-- Do not repeat information already provided unless requested.
-- Keep answers concise, clear, and technically useful.
-- For simple questions, answer in 1-3 sentences.
-- If the user says "in short", provide a very short answer.
-- If the user asks for a location, mention only the damage location.
-- If the user asks about damage type, identify only the visible damage.
-- If the user asks about causes, discuss possible causes only.
-- If the user asks about severity, discuss severity only.
-- If the user asks about repair, discuss repair only.
-- Provide a complete assessment only when explicitly requested.
-
-IMAGE RULES:
-
-- Use the uploaded image as evidence.
-- Describe only details that can reasonably be observed.
-- Do not invent cracks, corrosion, reinforcement, dimensions,
-  materials, damage, or structural conditions.
-- Do not assume a material type unless reasonably identifiable.
-- Distinguish visible observations from possible explanations.
-- If something cannot be confirmed, say so briefly.
-
-CONVERSATION RULES:
-
-- Maintain context across the conversation.
-- Remember the uploaded image when answering follow-up questions.
-- Understand short follow-ups such as "where?", "why?", "which part?",
-  "how severe?", and "in short".
-- Do not restart the assessment for every new question.
-- Answer the current question directly.
-
-SAFETY:
-
-- Never declare a structure safe or unsafe based only on images.
-- Mention professional inspection only when relevant to the question.
-
-RESPONSE STYLE:
-
-- Direct answer first.
-- No unnecessary headings.
-- No unnecessary bullet points.
-- No long explanations unless requested.
-- Do not add a summary at the end.
-- Do not ask unnecessary follow-up questions.
-- Answer only what is needed.
+For safety-related questions, explain briefly that image-based
+assessment alone cannot confirm structural safety.
 """
 
-# =========================================================
-# DATABASE AND AUTOMATIC MIGRATION
-# =========================================================
+# ============================================================
+# DATABASE
+# ============================================================
 
 def db_connect():
     conn = sqlite3.connect(DB_PATH, timeout=30)
 
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
 
     # Create tables if they do not exist
     conn.execute("""
@@ -111,36 +80,31 @@ def db_connect():
         )
     """)
 
-    # ---------------------------------------------
-    # Repair old chats table automatically
-    # ---------------------------------------------
+    # --------------------------------------------------------
+    # AUTOMATIC DATABASE MIGRATION
+    # Fixes older databases missing columns
+    # --------------------------------------------------------
 
     chat_columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(chats)").fetchall()
+        row[1] for row in conn.execute("PRAGMA table_info(chats)").fetchall()
     }
 
     required_chat_columns = {
-        "title": "TEXT",
+        "title": "TEXT DEFAULT 'New conversation'",
         "image": "BLOB",
         "image_type": "TEXT",
         "created": "TEXT",
         "updated": "TEXT"
     }
 
-    for column, datatype in required_chat_columns.items():
+    for column, definition in required_chat_columns.items():
         if column not in chat_columns:
             conn.execute(
-                f"ALTER TABLE chats ADD COLUMN {column} {datatype}"
+                f"ALTER TABLE chats ADD COLUMN {column} {definition}"
             )
 
-    # ---------------------------------------------
-    # Repair old messages table automatically
-    # ---------------------------------------------
-
     message_columns = {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()
     }
 
     required_message_columns = {
@@ -150,36 +114,35 @@ def db_connect():
         "created": "TEXT"
     }
 
-    for column, datatype in required_message_columns.items():
+    for column, definition in required_message_columns.items():
         if column not in message_columns:
             conn.execute(
-                f"ALTER TABLE messages ADD COLUMN {column} {datatype}"
+                f"ALTER TABLE messages ADD COLUMN {column} {definition}"
             )
 
-    # ---------------------------------------------
-    # Repair existing chat timestamps
-    # ---------------------------------------------
+    # Repair missing timestamps in old conversations
+    now = datetime.now().isoformat(timespec="seconds")
 
     conn.execute("""
         UPDATE chats
-        SET created = COALESCE(created, datetime('now'))
-        WHERE created IS NULL
+        SET created = ?
+        WHERE created IS NULL OR created = ''
+    """, (now,))
+
+    conn.execute("""
+        UPDATE chats
+        SET updated = created
+        WHERE updated IS NULL OR updated = ''
     """)
 
     conn.execute("""
-        UPDATE chats
-        SET updated = COALESCE(updated, created, datetime('now'))
-        WHERE updated IS NULL
+        CREATE INDEX IF NOT EXISTS idx_messages_chat_id
+        ON messages(chat_id)
     """)
 
     conn.commit()
-
     return conn
 
-
-# =========================================================
-# CHAT MANAGEMENT
-# =========================================================
 
 def create_chat():
     chat_id = str(uuid.uuid4())
@@ -187,21 +150,23 @@ def create_chat():
 
     conn = db_connect()
 
-    conn.execute("""
-        INSERT INTO chats
-        (id, title, image, image_type, created, updated)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        chat_id,
-        "New conversation",
-        None,
-        None,
-        now,
-        now
-    ))
+    try:
+        conn.execute("""
+            INSERT INTO chats
+            (id, title, image, image_type, created, updated)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            chat_id,
+            "New conversation",
+            None,
+            None,
+            now,
+            now
+        ))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
     return chat_id
 
@@ -209,29 +174,29 @@ def create_chat():
 def list_chats():
     conn = db_connect()
 
-    chats = conn.execute("""
-        SELECT id, title, updated
-        FROM chats
-        ORDER BY updated DESC
-    """).fetchall()
+    try:
+        chats = conn.execute("""
+            SELECT id, title, updated
+            FROM chats
+            ORDER BY updated DESC
+        """).fetchall()
 
-    conn.close()
-
-    return chats
+        return chats
+    finally:
+        conn.close()
 
 
 def get_chat(chat_id):
     conn = db_connect()
 
-    chat = conn.execute("""
-        SELECT id, title, image, image_type
-        FROM chats
-        WHERE id = ?
-    """, (chat_id,)).fetchone()
-
-    conn.close()
-
-    return chat
+    try:
+        return conn.execute("""
+            SELECT id, title, image, image_type
+            FROM chats
+            WHERE id = ?
+        """, (chat_id,)).fetchone()
+    finally:
+        conn.close()
 
 
 def save_image(chat_id, image_bytes, mime_type):
@@ -239,16 +204,33 @@ def save_image(chat_id, image_bytes, mime_type):
 
     conn = db_connect()
 
-    conn.execute("""
-        UPDATE chats
-        SET image = ?,
-            image_type = ?,
-            updated = ?
-        WHERE id = ?
-    """, (image_bytes, mime_type, now, chat_id))
+    try:
+        conn.execute("""
+            UPDATE chats
+            SET image = ?, image_type = ?, updated = ?
+            WHERE id = ?
+        """, (image_bytes, mime_type, now, chat_id))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remove_image(chat_id):
+    now = datetime.now().isoformat(timespec="seconds")
+
+    conn = db_connect()
+
+    try:
+        conn.execute("""
+            UPDATE chats
+            SET image = NULL, image_type = NULL, updated = ?
+            WHERE id = ?
+        """, (now, chat_id))
+
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def save_message(chat_id, role, content):
@@ -256,81 +238,105 @@ def save_message(chat_id, role, content):
 
     conn = db_connect()
 
-    conn.execute("""
-        INSERT INTO messages
-        (chat_id, role, content, created)
-        VALUES (?, ?, ?, ?)
-    """, (chat_id, role, content, now))
+    try:
+        conn.execute("""
+            INSERT INTO messages
+            (chat_id, role, content, created)
+            VALUES (?, ?, ?, ?)
+        """, (chat_id, role, content, now))
 
-    conn.execute("""
-        UPDATE chats
-        SET updated = ?
-        WHERE id = ?
-    """, (now, chat_id))
+        conn.execute("""
+            UPDATE chats
+            SET updated = ?
+            WHERE id = ?
+        """, (now, chat_id))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_messages(chat_id):
     conn = db_connect()
 
-    messages = conn.execute("""
-        SELECT role, content
-        FROM messages
-        WHERE chat_id = ?
-        ORDER BY id ASC
-    """, (chat_id,)).fetchall()
-
-    conn.close()
-
-    return messages
+    try:
+        return conn.execute("""
+            SELECT role, content
+            FROM messages
+            WHERE chat_id = ?
+            ORDER BY id ASC
+        """, (chat_id,)).fetchall()
+    finally:
+        conn.close()
 
 
 def set_chat_title(chat_id, title):
+    title = title.strip()
+
+    if not title:
+        return
+
     conn = db_connect()
 
-    conn.execute("""
-        UPDATE chats
-        SET title = ?
-        WHERE id = ?
-        AND title = 'New conversation'
-    """, (title[:55], chat_id))
+    try:
+        conn.execute("""
+            UPDATE chats
+            SET title = ?
+            WHERE id = ?
+              AND title = 'New conversation'
+        """, (title[:55], chat_id))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
-# =========================================================
-# IMAGE PROCESSING
-# =========================================================
+# ============================================================
+# IMAGE UTILITIES
+# ============================================================
 
 def image_data_url(image_bytes, mime_type):
     encoded = base64.b64encode(image_bytes).decode("utf-8")
-
     return f"data:{mime_type};base64,{encoded}"
 
 
-# =========================================================
+def compress_image(uploaded_file):
+    """
+    Convert uploaded image to JPEG for efficient storage and API transfer.
+    """
+
+    image = Image.open(uploaded_file).convert("RGB")
+
+    # Resize very large images while preserving aspect ratio
+    max_dimension = 1600
+
+    if max(image.size) > max_dimension:
+        image.thumbnail((max_dimension, max_dimension))
+
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=85, optimize=True)
+
+    return output.getvalue(), "image/jpeg"
+
+
+# ============================================================
 # GROQ AI
-# =========================================================
+# ============================================================
 
 def ask_groq(question, image_bytes, mime_type, history):
 
-    api_key = st.secrets.get(
-        "GROQ_API_KEY",
-        os.environ.get("GROQ_API_KEY", "")
-    )
+    try:
+        api_key = st.secrets.get("GROQ_API_KEY", "")
+        model = st.secrets.get("GROQ_MODEL", DEFAULT_MODEL)
 
-    model = st.secrets.get(
-        "GROQ_MODEL",
-        DEFAULT_MODEL
-    )
+    except Exception:
+        api_key = ""
+        model = DEFAULT_MODEL
 
     if not api_key:
         return (
-            "Groq API key is missing. "
-            "Please add GROQ_API_KEY in Streamlit Secrets."
+            "Groq API key is missing.\n\n"
+            "Please add GROQ_API_KEY in your Streamlit secrets."
         )
 
     messages = [
@@ -340,8 +346,8 @@ def ask_groq(question, image_bytes, mime_type, history):
         }
     ]
 
-    # Add recent conversation context
-    for role, content in history[-10:]:
+    # Include previous conversation context
+    for role, content in history[-12:]:
 
         if role in ("user", "assistant"):
 
@@ -350,7 +356,7 @@ def ask_groq(question, image_bytes, mime_type, history):
                 "content": content
             })
 
-    # Current user question
+    # Current user message
     user_content = [
         {
             "type": "text",
@@ -358,7 +364,7 @@ def ask_groq(question, image_bytes, mime_type, history):
         }
     ]
 
-    # Attach image if available
+    # Attach the current chat image
     if image_bytes:
 
         user_content.append({
@@ -379,8 +385,8 @@ def ask_groq(question, image_bytes, mime_type, history):
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": 350
+        "temperature": 0.3,
+        "max_tokens": 1200
     }
 
     headers = {
@@ -397,65 +403,84 @@ def ask_groq(question, image_bytes, mime_type, history):
             timeout=120
         )
 
-        response.raise_for_status()
+        if response.status_code != 200:
 
-        data = response.json()
+            try:
+                error_message = response.json().get("error", {}).get(
+                    "message", response.text
+                )
+            except Exception:
+                error_message = response.text
 
-        answer = data["choices"][0]["message"]["content"]
+            return f"Groq API Error ({response.status_code}):\n{error_message}"
+
+        result = response.json()
+
+        answer = result["choices"][0]["message"]["content"]
+
+        if isinstance(answer, list):
+
+            answer = "\n".join(
+                item.get("text", "")
+                for item in answer
+                if item.get("type") == "text"
+            )
 
         return answer.strip()
 
     except requests.exceptions.Timeout:
 
-        return "The request timed out. Please try again."
+        return "The AI response timed out. Please try again."
 
-    except requests.exceptions.HTTPError:
+    except requests.exceptions.ConnectionError:
 
-        try:
-            error_message = response.json().get("error", {}).get("message", "")
-        except Exception:
-            error_message = response.text[:500]
-
-        return f"AI API error: {error_message}"
+        return "Unable to connect to Groq. Please check your internet connection."
 
     except Exception as e:
 
-        return f"Something went wrong: {str(e)}"
+        return f"Unexpected error: {str(e)}"
 
 
-# =========================================================
-# SESSION STATE
-# =========================================================
+# ============================================================
+# SESSION INITIALIZATION
+# ============================================================
 
-if "chat_id" not in st.session_state:
+if "active_chat_id" not in st.session_state:
 
-    chats = list_chats()
+    existing_chats = list_chats()
 
-    if chats:
-        st.session_state.chat_id = chats[0][0]
+    if existing_chats:
+        st.session_state.active_chat_id = existing_chats[0][0]
     else:
-        st.session_state.chat_id = create_chat()
+        st.session_state.active_chat_id = create_chat()
 
 
-# =========================================================
+if "processing" not in st.session_state:
+    st.session_state.processing = False
+
+
+active_chat_id = st.session_state.active_chat_id
+
+
+# ============================================================
 # SIDEBAR
-# =========================================================
+# ============================================================
 
 with st.sidebar:
 
-    st.markdown("# 🏗️ CrackGPT")
+    st.markdown("""
+    <div style="padding-top:10px;">
+        <h2>🏗️ CrackGPT</h2>
+        <p style="color:gray;">Structural Intelligence Assistant</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.caption("Structural Intelligence Assistant")
+    # New Chat button
+    if st.button("＋ New Chat", use_container_width=True):
 
-    st.divider()
+        new_id = create_chat()
 
-    # New chat button
-    if st.button(
-        "＋ New Chat",
-        use_container_width=True
-    ):
-
-        st.session_state.chat_id = create_chat()
+        st.session_state.active_chat_id = new_id
 
         st.rerun()
 
@@ -465,82 +490,100 @@ with st.sidebar:
 
     chats = list_chats()
 
-    for chat_id, title, updated in chats:
+    if chats:
 
-        display_title = title or "New conversation"
+        for chat_id, title, updated in chats:
 
-        if st.button(
-            f"💬 {display_title}",
-            key=f"chat_{chat_id}",
-            use_container_width=True
-        ):
+            display_title = title or "New conversation"
 
-            st.session_state.chat_id = chat_id
+            is_active = chat_id == st.session_state.active_chat_id
 
-            st.rerun()
+            button_label = (
+                f"📌 {display_title}"
+                if is_active
+                else f"💬 {display_title}"
+            )
+
+            if st.button(
+                button_label,
+                key=f"chat_{chat_id}",
+                use_container_width=True
+            ):
+
+                st.session_state.active_chat_id = chat_id
+
+                st.rerun()
+
+    else:
+
+        st.caption("No conversations yet.")
+
+    st.divider()
+
+    st.caption(
+        "CrackGPT provides image-based structural observations "
+        "and is not a substitute for professional inspection."
+    )
 
 
-# =========================================================
+# ============================================================
 # LOAD CURRENT CHAT
-# =========================================================
+# ============================================================
 
-current_chat = get_chat(st.session_state.chat_id)
+active_chat_id = st.session_state.active_chat_id
 
-if current_chat is None:
+chat_data = get_chat(active_chat_id)
 
-    st.session_state.chat_id = create_chat()
+if chat_data is None:
 
-    st.rerun()
+    active_chat_id = create_chat()
+
+    st.session_state.active_chat_id = active_chat_id
+
+    chat_data = get_chat(active_chat_id)
 
 
-chat_id, chat_title, saved_image, saved_image_type = current_chat
+chat_id, chat_title, stored_image, stored_image_type = chat_data
+
+messages_history = get_messages(chat_id)
 
 
-# =========================================================
+# ============================================================
 # MAIN INTERFACE
-# =========================================================
+# ============================================================
 
 st.title("🏗️ CrackGPT")
 
-st.markdown("### Structural Intelligence Assistant")
+st.subheader("Structural Intelligence Assistant")
 
 st.write(
-    "Upload a structural image and ask questions about visible "
-    "damage patterns, cracks, or structural observations."
+    "Upload a structural image and ask questions about visible damage "
+    "patterns, cracks, or structural observations."
 )
 
 st.divider()
 
 
-# =========================================================
+# ============================================================
 # IMAGE UPLOAD
-# =========================================================
+# ============================================================
 
-st.markdown("📷 **Upload a structural image**")
+st.markdown("### 📷 Upload a structural image")
 
-uploaded_image = st.file_uploader(
+uploaded_file = st.file_uploader(
     "Upload an image",
     type=["jpg", "jpeg", "png", "webp"],
-    label_visibility="collapsed",
-    key=f"uploader_{chat_id}"
+    key=f"image_upload_{chat_id}",
+    label_visibility="collapsed"
 )
 
 
-# Use saved image if no new image is uploaded
-image_bytes = saved_image
-image_type = saved_image_type
+# Save uploaded image
+if uploaded_file is not None:
 
+    try:
 
-# Save newly uploaded image
-if uploaded_image is not None:
-
-    new_image_bytes = uploaded_image.getvalue()
-
-    # Save only if image has changed
-    if new_image_bytes != saved_image:
-
-        image_bytes = new_image_bytes
-        image_type = uploaded_image.type
+        image_bytes, image_type = compress_image(uploaded_file)
 
         save_image(
             chat_id,
@@ -548,50 +591,60 @@ if uploaded_image is not None:
             image_type
         )
 
-    else:
+        st.rerun()
 
-        image_bytes = saved_image
-        image_type = saved_image_type
+    except Exception as e:
+
+        st.error(f"Unable to process image: {e}")
 
 
-# Display current image
-if image_bytes:
+# Reload chat image after upload
+chat_data = get_chat(chat_id)
+
+if chat_data:
+
+    stored_image = chat_data[2]
+    stored_image_type = chat_data[3]
+
+
+# Display uploaded image
+if stored_image:
 
     st.image(
-        image_bytes,
-        caption="Image attached to this conversation",
+        stored_image,
+        caption="Uploaded structural image",
         use_container_width=True
     )
 
-    if st.button(
-        "Remove image from this conversation",
-        key=f"remove_image_{chat_id}"
-    ):
+    if st.button("🗑️ Remove image", key=f"remove_image_{chat_id}"):
 
-        save_image(chat_id, None, None)
+        remove_image(chat_id)
 
         st.rerun()
 
 
-st.divider()
-
-
-# =========================================================
+# ============================================================
 # DISPLAY CHAT HISTORY
-# =========================================================
+# ============================================================
 
-chat_history = get_messages(chat_id)
+for role, content in messages_history:
 
-for role, content in chat_history:
+    if role == "user":
 
-    with st.chat_message(role):
+        with st.chat_message("user"):
 
-        st.markdown(content)
+            st.markdown(content)
+
+    elif role == "assistant":
+
+        with st.chat_message("assistant"):
+
+            st.markdown(content)
 
 
-# =========================================================
+# ============================================================
 # CHAT INPUT
-# =========================================================
+# ============================================================
 
 question = st.chat_input(
     "Ask CrackGPT about your image..."
@@ -600,63 +653,62 @@ question = st.chat_input(
 
 if question:
 
-    # Save first user question as chat title
-    if chat_title == "New conversation":
+    question = question.strip()
 
+    if question:
+
+        # Save current question
+        save_message(
+            chat_id,
+            "user",
+            question
+        )
+
+        # Automatically create title from first question
         set_chat_title(
             chat_id,
             question
         )
 
-    # Save user message
-    save_message(
-        chat_id,
-        "user",
-        question
-    )
+        # History before the current question
+        previous_history = messages_history
 
-    # Show user message immediately
-    with st.chat_message("user"):
+        # Show current user message
+        with st.chat_message("user"):
 
-        st.markdown(question)
+            st.markdown(question)
 
-    # Get conversation context before AI response
-    history = get_messages(chat_id)
+        # AI response
+        with st.chat_message("assistant"):
 
-    # Remove the current question from history
-    history = history[:-1]
+            with st.spinner("Analyzing your question..."):
 
-    # Generate answer
-    with st.chat_message("assistant"):
+                answer = ask_groq(
+                    question=question,
+                    image_bytes=stored_image,
+                    mime_type=stored_image_type,
+                    history=previous_history
+                )
 
-        with st.spinner("CrackGPT is thinking..."):
+            st.markdown(answer)
 
-            answer = ask_groq(
-                question=question,
-                image_bytes=image_bytes,
-                mime_type=image_type,
-                history=history
-            )
+        # Save AI response
+        save_message(
+            chat_id,
+            "assistant",
+            answer
+        )
 
-        st.markdown(answer)
-
-    # Save assistant response
-    save_message(
-        chat_id,
-        "assistant",
-        answer
-    )
-
-    st.rerun()
+        st.rerun()
 
 
-# =========================================================
+# ============================================================
 # FOOTER
-# =========================================================
+# ============================================================
 
 st.divider()
 
 st.caption(
-    "CrackGPT provides image-based structural observations "
-    "and is not a substitute for professional inspection."
+    "CrackGPT provides image-based structural observations. "
+    "Image-based analysis alone cannot determine structural safety."
 )
