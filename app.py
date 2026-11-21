@@ -181,7 +181,7 @@ def ask_groq(question, image_bytes, mime_type, history):
         response = requests.post(
             GROQ_URL,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": messages, "temperature": 0.3},
+            json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": 250},
             timeout=120
         )
         if response.status_code != 200:
