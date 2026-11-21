@@ -113,7 +113,7 @@ def init_db():
             "created": "ALTER TABLE chats ADD COLUMN created TEXT",
             "updated": "ALTER TABLE chats ADD COLUMN updated TEXT",
         }
-         for column, sql in migrations.items():
+        for column, sql in migrations.items():
             if column not in chat_cols:
                 conn.execute(sql)
 
