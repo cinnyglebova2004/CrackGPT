@@ -1,4 +1,4 @@
-                import streamlit as st
+import streamlit as st
 import requests
 import sqlite3
 import base64
@@ -113,7 +113,20 @@ def init_db():
             "created": "ALTER TABLE chats ADD COLUMN created TEXT",
             "updated": "ALTER TABLE chats ADD COLUMN updated TEXT",
         }
-                        conn.execute(sql)
+         for column, sql in migrations.items():
+            if column not in chat_cols:
+                conn.execute(sql)
+
+        message_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+        msg_migrations = {
+            "chat_id": "ALTER TABLE messages ADD COLUMN chat_id TEXT",
+            "role": "ALTER TABLE messages ADD COLUMN role TEXT",
+            "content": "ALTER TABLE messages ADD COLUMN content TEXT",
+            "created": "ALTER TABLE messages ADD COLUMN created TEXT",
+        }
+        for column, sql in msg_migrations.items():
+            if column not in message_cols:
+                conn.execute(sql)
 
         # Fill timestamp fields in old records so sorting works.
         now = datetime.now().isoformat(timespec="seconds")
@@ -208,6 +221,7 @@ def ask_groq(question, image_bytes, mime_type, history):
             json={
                 "model": model,
                 "messages": messages,
+                "temperature": 0.3,
                 "max_tokens": 250
             },
             timeout=120
