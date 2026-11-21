@@ -1,3 +1,163 @@
+import streamlit as st
+import requests
+import sqlite3
+import base64
+import uuid
+from datetime import datetime
+from PIL import Image
+from io import BytesIO
+
+# -------------------- CONFIG --------------------
+st.set_page_config(page_title="CrackGPT | Structural Intelligence", page_icon="🏗️", layout="wide")
+DB_PATH = "crackgpt_chat_history.db"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+DEFAULT_MODEL = "qwen/qwen3.8-27b"
+
+SYSTEM_PROMPT = """You are CrackGPT, a visual structural-damage discussion assistant.
+Answer ONLY the user's current question. Do not automatically provide a full assessment or answer other questions that were not asked.
+Use the uploaded image as evidence. Describe only details you can reasonably see. Clearly distinguish visible observations from possible explanations.
+Do not invent material type, reinforcement exposure, corrosion, dimensions, severity, or structural safety. If something cannot be confirmed from the image, say so.
+Keep answers concise, clear, and technically useful. For structural safety decisions, state that image-based assessment alone is not sufficient and an engineer/site inspection may be needed.
+Maintain conversation context so follow-up questions can refer to the same image and previous answers.
+Only provide a complete structural damage assessment if the user explicitly asks for one.
+"""
+
+# -------------------- DATABASE + MIGRATION --------------------
+def db_connect():
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    return conn
+
+
+
+def init_db():
+    with db_connect() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS chats (
+            id TEXT PRIMARY KEY,
+            title TEXT DEFAULT 'New conversation',
+            image BLOB,
+            image_type TEXT,
+            created TEXT,
+            updated TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id TEXT,
+            role TEXT,
+            content TEXT,
+            created TEXT
+        )""")
+
+        # Migrate older database versions without deleting existing chats.
+        chat_cols = {row[1] for row in conn.execute("PRAGMA table_info(chats)").fetchall()}
+        migrations = {
+            "title": "ALTER TABLE chats ADD COLUMN title TEXT DEFAULT 'New conversation'",
+            "image": "ALTER TABLE chats ADD COLUMN image BLOB",
+            "image_type": "ALTER TABLE chats ADD COLUMN image_type TEXT",
+            "created": "ALTER TABLE chats ADD COLUMN created TEXT",
+            "updated": "ALTER TABLE chats ADD COLUMN updated TEXT",
+        }
+        for column, sql in migrations.items():
+            if column not in chat_cols:
+                conn.execute(sql)
+
+        message_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+        msg_migrations = {
+            "chat_id": "ALTER TABLE messages ADD COLUMN chat_id TEXT",
+            "role": "ALTER TABLE messages ADD COLUMN role TEXT",
+            "content": "ALTER TABLE messages ADD COLUMN content TEXT",
+            "created": "ALTER TABLE messages ADD COLUMN created TEXT",
+        }
+        for column, sql in msg_migrations.items():
+            if column not in message_cols:
+                conn.execute(sql)
+
+        # Fill timestamp fields in old records so sorting works.
+        conn.execute("UPDATE chats SET created=COALESCE(created, ?) WHERE created IS NULL", (datetime.now().isoformat(timespec="seconds"),))
+        conn.execute("UPDATE chats SET updated=COALESCE(updated, created, ?) WHERE updated IS NULL", (datetime.now().isoformat(timespec="seconds"),))
+        conn.commit()
+
+
+
+def create_chat():
+    chat_id = str(uuid.uuid4())
+    now = datetime.now().isoformat(timespec="seconds")
+    with db_connect() as conn:
+        conn.execute("INSERT INTO chats (id,title,image,image_type,created,updated) VALUES (?,?,?,?,?,?)",
+                    (chat_id, "New conversation", None, None, now, now))
+    return chat_id
+
+
+
+def list_chats():
+    with db_connect() as conn:
+        return conn.execute("SELECT id,title,updated FROM chats ORDER BY updated DESC").fetchall()
+
+
+
+def get_chat(chat_id):
+    with db_connect() as conn:
+        return conn.execute("SELECT id,title,image,image_type FROM chats WHERE id=?", (chat_id,)).fetchone()
+
+
+
+def save_image(chat_id, image_bytes, mime_type):
+    now = datetime.now().isoformat(timespec="seconds")
+    with db_connect() as conn:
+        conn.execute("UPDATE chats SET image=?, image_type=?, updated=? WHERE id=?",
+                    (image_bytes, mime_type, now, chat_id))
+
+
+
+def save_message(chat_id, role, content):
+    now = datetime.now().isoformat(timespec="seconds")
+    with db_connect() as conn:
+        conn.execute("INSERT INTO messages (chat_id,role,content,created) VALUES (?,?,?,?)",
+                    (chat_id, role, content, now))
+        conn.execute("UPDATE chats SET updated=? WHERE id=?", (now, chat_id))
+
+
+
+def get_messages(chat_id):
+    with db_connect() as conn:
+        return conn.execute("SELECT role,content FROM messages WHERE chat_id=? ORDER BY id", (chat_id,)).fetchall()
+
+
+
+def set_chat_title(chat_id, title):
+    clean_title = " ".join(title.strip().split())[:55] or "New conversation"
+    now = datetime.now().isoformat(timespec="seconds")
+    with db_connect() as conn:
+        conn.execute("UPDATE chats SET title=?,updated=? WHERE id=? AND title='New conversation'",
+                    (clean_title, now, chat_id))
+
+
+# -------------------- AI --------------------
+def image_data_url(image_bytes, mime_type):
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+
+def ask_groq(question, image_bytes, mime_type, history):
+    api_key = st.secrets.get("GROQ_API_KEY", "")
+    model = st.secrets.get("GROQ_MODEL", DEFAULT_MODEL)
+    if not api_key:
+        return "Groq API key is missing. Add GROQ_API_KEY in Streamlit Secrets."
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Recent text conversation only. Current/linked image is attached below.
+    for role, content in history[-12:]:
+        if role in ("user", "assistant"):
+            messages.append({"role": role, "content": content})
+     user_content = [{"type": "text", "text": question}]
+    if image_bytes:
+        user_content.append({
+            "type": "image_url",
+            "image_url": {"url": image_data_url(image_bytes, mime_type or "image/jpeg")}
+        })
+    messages.append({"role": "user", "content": user_content})        
 
     try:
         response = requests.post(
