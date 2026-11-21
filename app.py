@@ -4,6 +4,8 @@ import sqlite3
 import base64
 import uuid
 from datetime import datetime
+from PIL import Image
+from io import BytesIO
 
 # -------------------- CONFIG --------------------
 st.set_page_config(page_title="CrackGPT | Structural Intelligence", page_icon="🏗️", layout="wide")
