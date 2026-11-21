@@ -1,11 +1,9 @@
-import streamlit as st
+                import streamlit as st
 import requests
 import sqlite3
 import base64
 import uuid
 from datetime import datetime
-from PIL import Image
-from io import BytesIO
 
 # -------------------- CONFIG --------------------
 st.set_page_config(page_title="CrackGPT | Structural Intelligence", page_icon="🏗️", layout="wide")
@@ -13,69 +11,70 @@ DB_PATH = "crackgpt_chat_history.db"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 DEFAULT_MODEL = "qwen/qwen3.8-27b"
 
-SYSTEM_PROMPT = """
-You are CrackGPT, an AI assistant specialized in visual identification
-of structural damage and material deterioration.
+SYSTEM_PROMPT = """\
+You are CrackGPT, an AI assistant specialized in visual identification of structural damage, corrosion, and material deterioration.
 
-Identify damage based on the actual visual evidence in the uploaded image.
+PRIMARY TASK:
+Analyze the uploaded image and answer the user's exact question using visible evidence and structural engineering terminology.
 
-MATERIAL IDENTIFICATION:
-First distinguish between:
-- Concrete
-- Steel reinforcement (rebar)
-- Structural metal surfaces
-- Masonry
-- Other visible materials
+1. MATERIAL IDENTIFICATION
+- Identify the material before classifying the damage.
+- Distinguish concrete, reinforced concrete, steel, painted metal, masonry, and other visible materials.
+- Never assume a rusty surface is reinforcement.
+- Never identify rebar unless it is visible or clearly supported by the image.
+- Never assume concrete is present when it is not visible.
 
-DAMAGE IDENTIFICATION:
+2. DAMAGE IDENTIFICATION
+Recognize relevant damage types when supported, including concrete cracking, spalling, delamination, honeycombing, scaling, reinforcement corrosion, surface rust, uniform corrosion, pitting corrosion, crevice corrosion, coating failure, paint peeling, moisture staining, water seepage, efflorescence, masonry deterioration, deformation, and other material deterioration.
 
-Concrete:
-- Cracking
-- Spalling
-- Delamination
-- Honeycombing
-- Scaling
-- Concrete deterioration
+3. IMAGE-BASED OBSERVATIONS
+- Identify the actual visible damage whenever evidence supports it.
+- Describe location, pattern, shape, orientation, color, and extent when asked.
+- Distinguish rust staining from confirmed metal corrosion.
+- Distinguish surface cracks from concrete spalling.
+- Do not claim exposed reinforcement unless steel is visible.
+- Do not claim concrete spalling if concrete is not visible.
+- Do not invent cracks, pits, cavities, moisture, or missing material.
 
-Steel reinforcement:
-- Reinforcement corrosion
-- Rusting
-- Exposed reinforcement
-- Corrosion-related concrete damage
+4. CAUSES
+- Explain possible causes only when the user asks.
+- Present causes as possibilities unless confirmed.
+- Consider moisture, oxygen, chloride exposure, carbonation, environmental exposure, poor workmanship, material defects, loading, and other relevant factors when appropriate.
+- Never claim a specific cause based solely on an image.
 
-Metal surfaces:
-- Surface rust
-- Uniform corrosion
-- Pitting corrosion
-- Flaking corrosion
-- Protective coating failure
-- Paint peeling
+5. STRUCTURAL EFFECTS
+- Explain possible effects on strength, durability, serviceability, and structural performance only when requested.
+- Do not declare a structure safe or unsafe based only on images.
 
-Masonry:
-- Masonry cracking
-- Mortar deterioration
-- Displacement
-- Surface degradation
+6. PRECAUTIONS AND PREVENTION
+- Give precautions only when requested.
+- Provide recommendations relevant to the identified material and damage.
+- Avoid generic recommendations unrelated to the image.
 
-Other visible conditions:
-- Moisture staining
-- Water seepage
-- Efflorescence
-- Discoloration
+7. REPAIR AND TREATMENT
+- Suggest suitable repair or treatment methods only when asked.
+- Distinguish superficial damage from potentially deeper deterioration.
+- Do not recommend a specific repair without considering material, damage extent, and limitations of image-based assessment.
 
-RULES:
-- Identify the most likely specific damage type when evidence supports it.
-- Do not confuse reinforcement corrosion with corrosion of other metal surfaces.
-- Do not identify reinforcement unless it is visibly present or supported by clear evidence.
-- Do not mistake rust staining alone for confirmed reinforcement corrosion.
-- Do not confuse stains with cracks.
-- Describe visible evidence accurately.
-- Do not invent material types or damage.
-- Answer only the exact question asked.
-- Keep answers short, preferably 1-2 sentences.
-- Do not provide causes, severity, risks, or repair suggestions unless requested.
-- If something cannot be confirmed from the image, state the uncertainty briefly.
+8. QUESTION-SPECIFIC ANSWERING
+- Answer ONLY the question asked by the user.
+- Do not automatically generate a complete damage assessment.
+- Do not repeat previous answers unnecessarily.
+- Do not include causes, severity, risks, precautions, or treatments unless explicitly requested.
 - Maintain context for follow-up questions about the same image.
+
+9. RESPONSE STYLE
+- Use clear, simple, technically accurate language.
+- Keep answers concise, preferably 1-2 sentences.
+- Avoid unnecessary headings, bullet points, and lengthy explanations.
+- Use specific engineering terminology instead of vague descriptions.
+- If something cannot be confirmed visually, state the uncertainty briefly.
+
+10. ACCURACY
+- Never fabricate observations.
+- Never overstate confidence.
+- Separate visible evidence from engineering interpretation.
+- If the image is insufficient, clearly say what cannot be determined.
 """
 
 # -------------------- DATABASE + MIGRATION --------------------
@@ -95,7 +94,7 @@ def init_db():
             image BLOB,
             image_type TEXT,
             created TEXT,
-            updated TEXT
+             updated TEXT
         )""")
         conn.execute("""CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,34 +113,23 @@ def init_db():
             "created": "ALTER TABLE chats ADD COLUMN created TEXT",
             "updated": "ALTER TABLE chats ADD COLUMN updated TEXT",
         }
-        for column, sql in migrations.items():
-            if column not in chat_cols:
-                conn.execute(sql)
-
-        message_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
-        msg_migrations = {
-            "chat_id": "ALTER TABLE messages ADD COLUMN chat_id TEXT",
-            "role": "ALTER TABLE messages ADD COLUMN role TEXT",
-            "content": "ALTER TABLE messages ADD COLUMN content TEXT",
-            "created": "ALTER TABLE messages ADD COLUMN created TEXT",
-        }
-        for column, sql in msg_migrations.items():
-            if column not in message_cols:
-                conn.execute(sql)
+                        conn.execute(sql)
 
         # Fill timestamp fields in old records so sorting works.
-        conn.execute("UPDATE chats SET created=COALESCE(created, ?) WHERE created IS NULL", (datetime.now().isoformat(timespec="seconds"),))
-        conn.execute("UPDATE chats SET updated=COALESCE(updated, created, ?) WHERE updated IS NULL", (datetime.now().isoformat(timespec="seconds"),))
+        now = datetime.now().isoformat(timespec="seconds")
+        conn.execute("UPDATE chats SET created=COALESCE(created, ?) WHERE created IS NULL", (now,))
+        conn.execute("UPDATE chats SET updated=COALESCE(updated, created, ?) WHERE updated IS NULL", (now,))
         conn.commit()
-
 
 
 def create_chat():
     chat_id = str(uuid.uuid4())
     now = datetime.now().isoformat(timespec="seconds")
     with db_connect() as conn:
-        conn.execute("INSERT INTO chats (id,title,image,image_type,created,updated) VALUES (?,?,?,?,?,?)",
-                    (chat_id, "New conversation", None, None, now, now))
+        conn.execute(
+            "INSERT INTO chats (id,title,image,image_type,created,updated) VALUES (?,?,?,?,?,?)",
+            (chat_id, "New conversation", None, None, now, now)
+        )
     return chat_id
 
 
@@ -162,17 +150,15 @@ def save_image(chat_id, image_bytes, mime_type):
     now = datetime.now().isoformat(timespec="seconds")
     with db_connect() as conn:
         conn.execute("UPDATE chats SET image=?, image_type=?, updated=? WHERE id=?",
-                    (image_bytes, mime_type, now, chat_id))
-
+                   (image_bytes, mime_type, now, chat_id))
 
 
 def save_message(chat_id, role, content):
     now = datetime.now().isoformat(timespec="seconds")
     with db_connect() as conn:
         conn.execute("INSERT INTO messages (chat_id,role,content,created) VALUES (?,?,?,?)",
-                    (chat_id, role, content, now))
+                   (chat_id, role, content, now))
         conn.execute("UPDATE chats SET updated=? WHERE id=?", (now, chat_id))
-
 
 
 def get_messages(chat_id):
@@ -186,8 +172,7 @@ def set_chat_title(chat_id, title):
     now = datetime.now().isoformat(timespec="seconds")
     with db_connect() as conn:
         conn.execute("UPDATE chats SET title=?,updated=? WHERE id=? AND title='New conversation'",
-                    (clean_title, now, chat_id))
-
+                   (clean_title, now, chat_id))
 
 # -------------------- AI --------------------
 def image_data_url(image_bytes, mime_type):
@@ -203,23 +188,28 @@ def ask_groq(question, image_bytes, mime_type, history):
         return "Groq API key is missing. Add GROQ_API_KEY in Streamlit Secrets."
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    # Recent text conversation only. Current/linked image is attached below.
-    for role, content in history[-6:]:
+    # Use only the most recent exchange to limit input tokens.
+    for role, content in history[-2:]:
         if role in ("user", "assistant"):
             messages.append({"role": role, "content": content})
+
     user_content = [{"type": "text", "text": question}]
     if image_bytes:
         user_content.append({
             "type": "image_url",
             "image_url": {"url": image_data_url(image_bytes, mime_type or "image/jpeg")}
         })
-    messages.append({"role": "user", "content": user_content})        
+    messages.append({"role": "user", "content": user_content})
 
     try:
         response = requests.post(
             GROQ_URL,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": 250},
+            json={
+                "model": model,
+                "messages": messages,
+                "max_tokens": 250
+            },
             timeout=120
         )
         if response.status_code != 200:
@@ -290,7 +280,6 @@ if uploaded is not None:
     save_image(chat_id, image_bytes, mime_type)
     saved_image = image_bytes
     saved_image_type = mime_type
-
 elif st.session_state.pending_image is not None:
     saved_image = st.session_state.pending_image
     saved_image_type = st.session_state.pending_image_type
@@ -324,6 +313,7 @@ if question:
 
     with st.chat_message("user"):
         st.markdown(question)
+
 
     with st.chat_message("assistant"):
         with st.spinner("Analyzing your question..."):
