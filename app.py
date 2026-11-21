@@ -238,7 +238,7 @@ if not chat:
 chat_id, chat_title, saved_image, saved_image_type = chat
 
 
-st.title("🏗️ CrackGPT")
+st.title("CrackGPT")
 st.subheader("Structural Intelligence Assistant")
 st.write("Upload a structural image and ask a specific question about visible damage, cracks, or observations.")
 st.divider()
