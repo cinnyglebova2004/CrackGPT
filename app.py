@@ -95,3 +95,6 @@ def ask_groq(question, image_bytes, mime_type, history):
     if image_bytes:
         user_content.append({"type": "image_url", "image_url": {"url": image_data_url(image_bytes, mime_type or "image/jpeg")}})
     messages.append({"role": "user", "content": user_content})
+st.title("🏗️ CrackGPT")
+st.write("Structural Intelligence Assistant")
+st.success("Streamlit is rendering successfully!")    
